@@ -37,6 +37,14 @@ on:
         type: string
         required: true
         description: 'The Hugging Face repository to push to'
+      tenancy:
+        type: choice
+        required: false
+        description: 'The tenancy of the machine'
+        default: 'on_demand'
+        options:
+          - 'spot'
+          - 'on_demand'
 
 jobs:
   sft:
@@ -46,7 +54,7 @@ jobs:
       - gpu=T4
       - cpu=4
       - ram=16
-      - tenancy=spot
+      - tenancy=${{ inputs.tenancy }}
       - architecture=x64
     timeout-minutes: 180
     env:

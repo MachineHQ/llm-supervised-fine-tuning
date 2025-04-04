@@ -1,0 +1,144 @@
+name: Supervised Fine Tuning With Retry
+
+on:
+  workflow_dispatch:
+    inputs:
+      attempt:
+        type: string
+        description: 'The attempt number'
+        default: '1'
+      max_attempts:
+        type: number
+        description: 'The maximum number of attempts'
+        default: 5
+      source_model:
+        type: string
+        required: true
+        description: 'The source model'
+        default: 'unsloth/Llama-3.2-3B-Instruct'
+      data_set:
+        type: string
+        required: true
+        description: 'The data set'
+        default: 'mlabonne/FineTome-100k'
+      max_seq_length:
+        type: string
+        required: false
+        description: 'The maximum sequence length'
+        default: '2048'
+      lora_rank:
+        type: string
+        required: false
+        description: 'The lora rank. The size of the LoRA adapter layer'
+        default: '16'
+      max_steps:
+        type: string
+        required: false
+        description: 'The maximum number of steps'
+        default: '100'
+      learning_rate:
+        type: string
+        required: false
+        description: 'The learning rate'
+        default: '2e-4'
+      hf_target_repo:
+        type: string
+        required: true
+        description: 'The Hugging Face repository to push to'
+
+permissions:
+  actions: write
+  contents: read
+  checks: read
+
+jobs:
+  train-with-retry:
+    name: Llama 3.2 3B - Conversational Fine Tuning (unsloth)
+    runs-on:
+      - machine
+      - gpu=T4
+      - cpu=4
+      - ram=16
+      - tenancy=spot
+      - architecture=x64
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_ENABLE_HF_TRANSFER: 1
+      HF_HUB_DOWNLOAD_TIMEOUT: 120
+      SOURCE_MODEL: ${{ inputs.source_model }}
+      DATA_SET: ${{ inputs.data_set }}
+      MAX_SEQ_LENGTH: ${{ inputs.max_seq_length }}
+      LORA_RANK: ${{ inputs.lora_rank }}
+      MAX_STEPS: ${{ inputs.max_steps }}
+      LEARNING_RATE: ${{ inputs.learning_rate }}
+      HF_TARGET_REPO: ${{ inputs.hf_target_repo }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv --python=3.10
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          deactivate
+
+      - name: Run Training
+        run: |
+          source .venv/bin/activate
+          python3 "supervised_fine_tuning_checkpointed.py"
+
+  check-runner-failure:
+      name: Check for runner failure
+      needs: train-with-retry
+      if: ${{ failure() }}
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - name: Check for interruption
+          uses: ./.github/actions/check-runner-interruption
+          id: check_interruption
+          with:
+            github-token: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Calculate next attempt
+          if: ${{ steps.check_interruption.outputs.was_interrupted == 'true' }}
+          id: next-attempt
+          run: |
+            echo "Job was interrupted by spot instance shutdown"
+            NEXT_ATTEMPT=$((${CURRENT_ATTEMPT} + 1))
+            echo "next_attempt=${NEXT_ATTEMPT}" >> $GITHUB_OUTPUT
+            if [[ ${NEXT_ATTEMPT} -gt ${{ inputs.max_attempts }} ]]; then
+              echo "Max attempts reached"
+              exit 1
+            fi
+          env:
+            CURRENT_ATTEMPT: ${{ inputs.attempt }}
+
+        - name: Trigger next attempt
+          if: ${{ steps.check_interruption.outputs.was_interrupted == 'true' }}
+          uses: benc-uk/workflow-dispatch@v1
+          with:
+            workflow: supervised-fine-tuning-with-retry.yaml
+            token: ${{ secrets.GITHUB_TOKEN }}
+            inputs: |
+              {
+                "attempt": "${{ steps.next-attempt.outputs.next_attempt }}",
+                "max_attempts": "${{ inputs.max_attempts }}",
+                "source_model": "${{ inputs.source_model }}",
+                "data_set": "${{ inputs.data_set }}",
+                "max_seq_length": "${{ inputs.max_seq_length }}",
+                "lora_rank": "${{ inputs.lora_rank }}",
+                "max_steps": "${{ inputs.max_steps }}",
+                "learning_rate": "${{ inputs.learning_rate }}",
+                "hf_target_repo": "${{ inputs.hf_target_repo }}"
+              }
