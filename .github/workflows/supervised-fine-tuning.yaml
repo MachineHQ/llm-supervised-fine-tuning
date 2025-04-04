@@ -1,0 +1,84 @@
+name: Supervised Fine Tuning
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_model:
+        type: string
+        required: true
+        description: 'The source model'
+        default: 'unsloth/Llama-3.2-3B-Instruct'
+      data_set:
+        type: string
+        required: true
+        description: 'The data set'
+        default: 'mlabonne/FineTome-100k'
+      max_seq_length:
+        type: string
+        required: false
+        description: 'The maximum sequence length'
+        default: '2048'
+      lora_rank:
+        type: string
+        required: false
+        description: 'The lora rank. The size of the LoRA adapter layer'
+        default: '16'
+      max_steps:
+        type: string
+        required: false
+        description: 'The maximum number of steps'
+        default: '100'
+      learning_rate:
+        type: string
+        required: false
+        description: 'The learning rate'
+        default: '2e-4'
+      hf_target_repo:
+        type: string
+        required: true
+        description: 'The Hugging Face repository to push to'
+
+jobs:
+  sft:
+    name: Llama 3.2 3B - Conversational Fine Tuning (unsloth)
+    runs-on:
+      - machine
+      - gpu=T4
+      - cpu=4
+      - ram=16
+      - tenancy=spot
+      - architecture=x64
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_ENABLE_HF_TRANSFER: 1
+      HF_HUB_DOWNLOAD_TIMEOUT: 120
+      SOURCE_MODEL: ${{ inputs.source_model }}
+      DATA_SET: ${{ inputs.data_set }}
+      MAX_SEQ_LENGTH: ${{ inputs.max_seq_length }}
+      LORA_RANK: ${{ inputs.lora_rank }}
+      MAX_STEPS: ${{ inputs.max_steps }}
+      LEARNING_RATE: ${{ inputs.learning_rate }}
+      HF_TARGET_REPO: ${{ inputs.hf_target_repo }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv --python=3.10
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          deactivate
+
+      - name: Run Training
+        run: |
+          source .venv/bin/activate
+          python3 "supervised_fine_tuning.py"
